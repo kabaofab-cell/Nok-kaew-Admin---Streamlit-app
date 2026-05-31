@@ -12,16 +12,20 @@ def render_settings():
     """Render the settings page."""
     st.title("⚙️ ตั้งค่า")
 
-    categories_data = fetch_worksheet("categories")
-    platforms_data = fetch_worksheet("platforms")
-    qc_data = fetch_worksheet("qc")
-    settings_data = fetch_worksheet("settings")
+    try:
+        categories_data = fetch_worksheet("categories")
+        platforms_data = fetch_worksheet("platforms")
+        qc_data = fetch_worksheet("qc")
+        settings_data = fetch_worksheet("settings")
+    except Exception as e:
+        st.error(f"❌ เกิดข้อผิดพลาดในการเชื่อมต่อ Google Sheets: {e}")
+        return
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 หมวดหมู่", "🌐 แพลตฟอร์ม", "👥 ผู้ QC", "⚖️ ส่วนแบ่ง", "💾 Backup"])
 
     with tab1:
         st.subheader("📚 จัดการหมวดหมู่นิยาย")
-        if categories_data:
+        if categories_data and len(categories_data) > 1:
             headers = categories_data[0]
             data = categories_data[1:]
             df = pd.DataFrame(data, columns=headers)
@@ -32,10 +36,12 @@ def render_settings():
                 write_worksheet("categories", new_data)
                 st.success("✅ บันทึกสำเร็จ")
                 st.rerun()
+        else:
+            st.info("ยังไม่มีข้อมูลหมวดหมู่")
 
     with tab2:
         st.subheader("🌐 จัดการแพลตฟอร์ม")
-        if platforms_data:
+        if platforms_data and len(platforms_data) > 1:
             headers = platforms_data[0]
             data = platforms_data[1:]
             df = pd.DataFrame(data, columns=headers)
@@ -46,10 +52,12 @@ def render_settings():
                 write_worksheet("platforms", new_data)
                 st.success("✅ บันทึกสำเร็จ")
                 st.rerun()
+        else:
+            st.info("ยังไม่มีข้อมูลแพลตฟอร์ม")
 
     with tab3:
         st.subheader("👥 จัดการผู้ QC")
-        if qc_data:
+        if qc_data and len(qc_data) > 1:
             headers = qc_data[0]
             data = qc_data[1:]
             df = pd.DataFrame(data, columns=headers)
@@ -60,10 +68,12 @@ def render_settings():
                 write_worksheet("qc", new_data)
                 st.success("✅ บันทึกสำเร็จ")
                 st.rerun()
+        else:
+            st.info("ยังไม่มีข้อมูลผู้ QC")
 
     with tab4:
         st.subheader("⚖️ จัดการส่วนแบ่ง")
-        if settings_data:
+        if settings_data and len(settings_data) > 1:
             settings = get_settings_dict(settings_data)
             user1_name = settings.get("user1_name", "ตอง")
             user2_name = settings.get("user2_name", "ตาว")
@@ -97,6 +107,8 @@ def render_settings():
                     st.rerun()
                 else:
                     st.error("กรุณาแก้ไขให้รวมเท่ากับ 100%")
+        else:
+            st.info("ยังไม่มีข้อมูลการตั้งค่า")
 
     with tab5:
         st.subheader("💾 Backup ข้อมูล")
