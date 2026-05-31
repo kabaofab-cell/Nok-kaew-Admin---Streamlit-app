@@ -7,5 +7,5 @@ pandas==2.2.3
 plotly==5.24.1
 python-dateutil==2.9.0.post0
 pytz==2024.1
-Pillow>=10.0.0
+Pillow>=7.1.0,<11
 requests==2.32.3
