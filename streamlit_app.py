@@ -3,7 +3,6 @@ Main entry point and navigation.
 """
 
 import streamlit as st
-from lib.sheets import ensure_worksheets
 
 try:
     st.set_page_config(
@@ -45,8 +44,6 @@ with st.sidebar:
         st.rerun()
 
     st.caption("Made with 💖 for Nok-kaew")
-
-ensure_worksheets()
 
 if page == "📊 Overview":
     from pages_app.overview import render_overview

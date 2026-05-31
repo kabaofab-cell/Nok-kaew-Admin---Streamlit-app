@@ -1,116 +1,208 @@
-"""Income & accounts page for Nok-kaew Admin."""
+"""Income & accounts — reads/writes the Finance tab."""
+
+import datetime as dt
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from lib.sheets import fetch_worksheet, write_worksheet, append_row
-from lib.helpers import format_currency, get_settings_dict
+import plotly.express as px
+
+from lib.sheets import get_df, get_platforms, get_qc_list, append_rows, log_audit, title_to_qc_map
+from lib.schema import TAB_FINANCE, TAB_BOOKS, PLATFORM_FEE_RATE
+from lib.helpers import format_currency, num_series, to_num, add_month_column, month_options, thai_month_label
+
+
+def _save_finance_rows(rows, source):
+    from lib.sheets import append_rows
+    append_rows(TAB_FINANCE, rows)
+    log_audit("เพิ่มรายรับ", f"{source} ({len(rows)} รายการ)")
 
 
 def render_accounts():
-    """Render the income & accounts page."""
     st.title("💰 บัญชี & ส่วนแบ่ง")
 
-    income_data = fetch_worksheet("income")
-    platforms_data = fetch_worksheet("platforms")
-    qc_data = fetch_worksheet("qc")
-    novels_data = fetch_worksheet("novels")
-    settings_data = fetch_worksheet("settings")
+    try:
+        finance = get_df(TAB_FINANCE)
+    except Exception as e:
+        st.error(f"❌ เชื่อมต่อ Google Sheets ไม่ได้: {e}")
+        return
 
-    platforms = [row[0] for row in platforms_data[1:]] if platforms_data else []
-    qc_list = [row[0] for row in qc_data[1:]] if qc_data else []
-    novels_list = [row[1] for row in novels_data[1:]] if novels_data else []
-    settings = get_settings_dict(settings_data)
+    tab_quick, tab_month, tab_data, tab_split = st.tabs([
+        "⚡ ลงบัญชีด่วนรายคน",
+        "📅 รายรับเดือนนี้",
+        "📊 ฐานข้อมูลรายรับ",
+        "💵 สรุปส่วนแบ่ง",
+    ])
 
-    user1_name = settings.get("user1_name", "ตอง")
-    user2_name = settings.get("user2_name", "ตาว")
-    user1_split = float(settings.get("user1_split", 50))
-    user2_split = float(settings.get("user2_split", 50))
+    # ── Quick per-QC entry ──
+    with tab_quick:
+        st.info("เลือกวันที่ แพลตฟอร์ม และผู้ดูแล (QC) แล้วกรอกยอดพร้อมกัน")
 
-    tab1, tab2, tab3 = st.tabs(["📝 ลงบัญชีด่วน", "📊 ฐานข้อมูลรายรับ", "💵 สรุปส่วนแบ่ง"])
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            entry_date = st.date_input("วันที่ลงบัญชี", value=dt.date.today())
+        with c2:
+            platform = st.selectbox("แพลตฟอร์ม", get_platforms() or ["(ไม่มีแพลตฟอร์ม)"])
+        with c3:
+            qc = st.selectbox("กรองตามผู้ดูแล (QC)", get_qc_list() or ["(ไม่มี QC)"])
 
-    with tab1:
-        st.subheader("📝 ลงบัญชีรายรับด่วน")
-
-        with st.form("quick_income_form"):
-            income_date = st.date_input("วันที่", value=pd.Timestamp.now().date())
-            platform = st.selectbox("แพลตฟอร์ม", platforms)
-            qc = st.selectbox("ผู้ QC", qc_list)
-            amount = st.number_input("จำนวนเงิน", min_value=0.0, format="%.2f")
-            novel = st.selectbox("นิยาย", novels_list)
-
-            submitted = st.form_submit_button("💾 บันทึก")
-
-            if submitted:
-                if amount > 0 and platform and qc and novel:
-                    income_id = f"INC_{datetime.now().timestamp()}"
-                    new_row = [
-                        income_id,
-                        income_date.strftime("%d/%m/%Y"),
-                        platform,
-                        qc,
-                        "",
-                        novel,
-                        str(amount)
-                    ]
-                    append_row("income", new_row)
-                    st.success("✅ บันทึกสำเร็จ")
-                    st.rerun()
-                else:
-                    st.error("กรุณากรอกข้อมูลให้ครบ")
-
-    with tab2:
-        st.subheader("📊 ฐานข้อมูลรายรับ")
-
-        if income_data and len(income_data) > 1:
-            df = pd.DataFrame(income_data[1:], columns=income_data[0])
-
-            filter_qc = st.multiselect("กรองตาม QC", qc_list)
-            filter_platform = st.multiselect("กรองตามแพลตฟอร์ม", platforms)
-
-            if filter_qc:
-                df = df[df["qc"].isin(filter_qc)]
-            if filter_platform:
-                df = df[df["platform"].isin(filter_platform)]
-
-            edited_df = st.data_editor(df, use_container_width=True)
-
-            if st.button("💾 บันทึกการแก้ไข"):
-                new_data = edited_df.values.tolist()
-                write_worksheet("income", new_data)
-                st.success("✅ บันทึกสำเร็จ")
-                st.rerun()
+        books = get_df(TAB_BOOKS)
+        if books.empty or "ชื่อเรื่อง" not in books.columns:
+            st.warning("ยังไม่มีข้อมูลนิยายใน Books")
         else:
+            qc_col = books.get("QC", pd.Series(dtype=str))
+            qc_titles = books.loc[qc_col == qc, "ชื่อเรื่อง"].tolist()
+            if not qc_titles:
+                st.warning(f"ไม่พบนิยายของผู้ดูแล '{qc}'")
+            else:
+                grid = pd.DataFrame({"ชื่อเรื่อง": qc_titles, "ยอดดิบ (฿)": [0.0] * len(qc_titles)})
+                edited = st.data_editor(
+                    grid,
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["ชื่อเรื่อง"],
+                    column_config={
+                        "ยอดดิบ (฿)": st.column_config.NumberColumn(
+                            "ยอดดิบ (฿)", min_value=0.0, step=100.0, format="%.2f"
+                        )
+                    },
+                    key=f"quick_{qc}_{platform}",
+                )
+
+                filled = [(r["ชื่อเรื่อง"], to_num(r["ยอดดิบ (฿)"]))
+                          for _, r in edited.iterrows() if to_num(r["ยอดดิบ (฿)"]) > 0]
+                preview_total = sum(g for _, g in filled)
+                st.caption(
+                    f"กรอกแล้ว {len(filled)} เรื่อง · รวมยอดดิบ {format_currency(preview_total)} ฿ "
+                    f"→ สุทธิหลังหัก {int(PLATFORM_FEE_RATE*100)}% "
+                    f"≈ {format_currency(preview_total * (1 - PLATFORM_FEE_RATE))} ฿"
+                )
+
+                if st.button("💾 บันทึกยอดรายรับทั้งหมด", type="primary"):
+                    if not filled:
+                        st.error("ยังไม่ได้กรอกยอดเลย")
+                    else:
+                        rows = []
+                        for title, gross in filled:
+                            fee = round(gross * PLATFORM_FEE_RATE, 2)
+                            net = round(gross - fee, 2)
+                            rows.append([
+                                entry_date.strftime("%Y-%m-%d"),
+                                title, platform, gross, fee, net
+                            ])
+                        _save_finance_rows(rows, f"{entry_date} / {platform} / {qc}")
+                        st.success(f"✅ บันทึก {len(rows)} รายการสำเร็จ")
+                        st.rerun()
+
+    # ── This month ──
+    with tab_month:
+        if finance.empty or "ยอดสุทธิ" not in finance.columns:
+            st.info("ยังไม่มีข้อมูลใน Finance")
+        else:
+            fin = add_month_column(finance, "วันที่")
+            fin["_gross"] = num_series(fin.get("ยอดดิบ", pd.Series(dtype=float)))
+            fin["_net"] = num_series(fin["ยอดสุทธิ"])
+
+            this_month = dt.date.today().strftime("%Y-%m")
+            st.subheader(f"📅 {thai_month_label(this_month)}")
+
+            cur = fin[fin["_month"] == this_month]
+            if cur.empty:
+                st.warning(f"เดือนนี้ ({thai_month_label(this_month)}) ยังไม่มีรายรับ")
+                latest = month_options(finance, "วันที่")
+                if latest:
+                    st.caption(f"เดือนล่าสุดที่มีข้อมูล: {thai_month_label(latest[0])}")
+            else:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("จำนวนรายการ", len(cur))
+                m2.metric("ยอดดิบรวม", format_currency(cur["_gross"].sum()))
+                m3.metric("💰 ยอดสุทธิรวม", format_currency(cur["_net"].sum()))
+
+                qc_map = title_to_qc_map()
+                cur = cur.copy()
+                cur["ผู้ QC"] = cur["ชื่อเรื่อง"].map(lambda t: qc_map.get(str(t).strip(), "ไม่ระบุ"))
+                by_qc = cur.groupby("ผู้ QC")["_net"].sum().reset_index()
+                cols = st.columns(max(len(by_qc), 1))
+                for col, (_, r) in zip(cols, by_qc.iterrows()):
+                    col.metric(f"👤 {r['ผู้ QC']}", format_currency(r["_net"]))
+
+                st.divider()
+                show_cols = [c for c in ["วันที่", "ชื่อเรื่อง", "แพลตฟอร์ม", "ยอดดิบ",
+                                          "หักแพลตฟอร์ม (17%)", "ยอดสุทธิ", "ผู้ QC"]
+                             if c in cur.columns or c == "ผู้ QC"]
+                st.dataframe(cur[show_cols], use_container_width=True, hide_index=True)
+
+    # ── All data with month filter ──
+    with tab_data:
+        if finance.empty:
             st.info("ยังไม่มีข้อมูลรายรับ")
+        else:
+            months = month_options(finance, "วันที่")
+            picked = st.selectbox(
+                "เลือกเดือน", ["ทั้งหมด"] + months,
+                format_func=lambda x: "ทั้งหมด" if x == "ทั้งหมด" else thai_month_label(x),
+                key="data_month",
+            )
+            fin = add_month_column(finance, "วันที่")
+            if picked != "ทั้งหมด":
+                fin = fin[fin["_month"] == picked]
 
-    with tab3:
-        st.subheader("💵 สรุปส่วนแบ่ง")
+            fin = fin.sort_values("_date", ascending=False)
+            net_total = num_series(fin["ยอดสุทธิ"]).sum() if "ยอดสุทธิ" in fin.columns else 0
+            st.caption(f"แสดง {len(fin)} รายการ · ยอดสุทธิรวม {format_currency(net_total)} ฿")
+            st.dataframe(
+                fin.drop(columns=["_date", "_month"], errors="ignore"),
+                use_container_width=True, hide_index=True,
+            )
 
-        if income_data and len(income_data) > 1:
-            df = pd.DataFrame(income_data[1:], columns=income_data[0])
-            df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+    # ── Split summary ──
+    with tab_split:
+        if finance.empty or "ยอดสุทธิ" not in finance.columns:
+            st.info("ยังไม่มีข้อมูลใน Finance")
+        else:
+            months = month_options(finance, "วันที่")
+            picked = st.selectbox(
+                "เลือกเดือน", ["ทั้งหมด"] + months,
+                format_func=lambda x: "ทั้งหมด" if x == "ทั้งหมด" else thai_month_label(x),
+                key="split_month",
+            )
+            fin = add_month_column(finance, "วันที่")
+            if picked != "ทั้งหมด":
+                fin = fin[fin["_month"] == picked]
 
-            total_income = df["amount"].sum()
+            fin = fin.copy()
+            fin["_gross"] = num_series(fin.get("ยอดดิบ", pd.Series(dtype=float)))
+            fin["_net"] = num_series(fin["ยอดสุทธิ"])
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(f"📊 รวมรายได้", format_currency(total_income))
-            with col2:
-                user1_income = (total_income * user1_split) / 100
-                st.metric(f"💰 {user1_name} ({user1_split}%)", format_currency(user1_income))
-            with col3:
-                user2_income = (total_income * user2_split) / 100
-                st.metric(f"💰 {user2_name} ({user2_split}%)", format_currency(user2_income))
+            c1, c2, c3 = st.columns(3)
+            c1.metric("ยอดดิบรวม", format_currency(fin["_gross"].sum()))
+            c2.metric("หักแพลตฟอร์ม", format_currency(fin["_gross"].sum() - fin["_net"].sum()))
+            c3.metric("💰 ยอดสุทธิรวม", format_currency(fin["_net"].sum()))
 
             st.divider()
 
-            # Income breakdown by QC and platform
-            st.write("**รายรับแยกตามผู้ QC**")
-            qc_breakdown = df.groupby("qc")["amount"].sum().sort_values(ascending=False)
-            st.bar_chart(qc_breakdown)
+            qc_map = title_to_qc_map()
+            fin["ผู้ QC"] = fin["ชื่อเรื่อง"].map(lambda t: qc_map.get(str(t).strip(), "ไม่ระบุ"))
+            by_qc = fin.groupby("ผู้ QC")["_net"].sum().sort_values(ascending=False).reset_index()
 
-            st.write("**รายรับแยกตามแพลตฟอร์ม**")
-            platform_breakdown = df.groupby("platform")["amount"].sum().sort_values(ascending=False)
-            st.bar_chart(platform_breakdown)
-        else:
-            st.info("ยังไม่มีข้อมูลรายรับ")
+            st.subheader("👥 รายได้สุทธิ แยกตามผู้ QC")
+            cols = st.columns(max(len(by_qc), 1))
+            for col, (_, r) in zip(cols, by_qc.iterrows()):
+                col.metric(r["ผู้ QC"], format_currency(r["_net"]))
+
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                if not by_qc.empty:
+                    fig = px.pie(by_qc, names="ผู้ QC", values="_net", title="สัดส่วนรายได้ตาม QC")
+                    st.plotly_chart(fig, use_container_width=True)
+            with cc2:
+                if "แพลตฟอร์ม" in fin.columns:
+                    by_plat = (
+                        fin.assign(แพลตฟอร์ม=fin["แพลตฟอร์ม"].str.strip())
+                        .groupby("แพลตฟอร์ม")["_net"].sum().sort_values(ascending=False)
+                        .reset_index()
+                    )
+                    by_plat.columns = ["แพลตฟอร์ม", "รายได้สุทธิ"]
+                    st.subheader("🌐 ตามแพลตฟอร์ม")
+                    disp = by_plat.copy()
+                    disp["รายได้สุทธิ"] = disp["รายได้สุทธิ"].map(format_currency)
+                    st.dataframe(disp, use_container_width=True, hide_index=True)
