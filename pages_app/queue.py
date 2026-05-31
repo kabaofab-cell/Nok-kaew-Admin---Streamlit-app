@@ -27,24 +27,16 @@ def render_queue():
             df = pd.DataFrame(queue_data[1:], columns=queue_data[0])
             edited_df = st.data_editor(df, use_container_width=True)
 
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("💾 บันทึกการเปลี่ยนแปลง"):
-                    new_data = edited_df.values.tolist()
-                    write_worksheet("work_queue", new_data)
-                    st.success("✅ บันทึกสำเร็จ")
-                    st.rerun()
-
-            with col2:
-                if st.button("➕ เพิ่มคิวงานใหม่"):
-                    st.session_state.show_add_queue = True
+            if st.button("💾 บันทึกการเปลี่ยนแปลง"):
+                new_data = edited_df.values.tolist()
+                write_worksheet("work_queue", new_data)
+                st.success("✅ บันทึกสำเร็จ")
+                st.rerun()
 
         else:
             st.info("ยังไม่มีคิวงาน")
-            if st.button("➕ เพิ่มคิวงานใหม่"):
-                st.session_state.show_add_queue = True
 
-        if st.session_state.get("show_add_queue"):
+        if st.button("➕ เพิ่มคิวงานใหม่"):
             st.divider()
             st.subheader("➕ เพิ่มคิวงานใหม่")
 
@@ -73,7 +65,6 @@ def render_queue():
                         ]
                         append_row("work_queue", new_row)
                         st.success("✅ เพิ่มคิวสำเร็จ")
-                        st.session_state.show_add_queue = False
                         st.rerun()
                     else:
                         st.error("กรุณากรอกข้อมูลที่จำเป็น (*)")

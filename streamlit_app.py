@@ -5,12 +5,15 @@ Main entry point and navigation.
 import streamlit as st
 from lib.sheets import ensure_worksheets
 
-st.set_page_config(
-    page_title="🐦 Nok-kaew Admin",
-    page_icon="🐦",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+try:
+    st.set_page_config(
+        page_title="🐦 Nok-kaew Admin",
+        page_icon="🐦",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+except:
+    pass
 
 st.markdown("""
 <style>

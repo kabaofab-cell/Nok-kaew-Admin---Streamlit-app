@@ -7,11 +7,8 @@ from lib.schema import WORKSHEETS
 
 def get_gsheet_connection():
     """Get authenticated gspread client from Streamlit secrets."""
-    try:
-        return st.connection("gsheets", type=st.experimental_connection.ExperimentalBaseConnection).client
-    except:
-        creds_dict = st.secrets["connections"]["gsheets"]
-        return gspread.service_account_from_dict(creds_dict)
+    creds_dict = st.secrets["connections"]["gsheets"]
+    return gspread.service_account_from_dict(creds_dict)
 
 
 def get_spreadsheet():
