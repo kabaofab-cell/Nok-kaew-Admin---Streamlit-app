@@ -35,7 +35,7 @@ def render_accounts():
 
     # ── Quick per-QC entry ──
     with tab_quick:
-        st.info("เลือกวันที่ แพลตฟอร์ม และผู้ดูแล (QC) แล้วกรอกยอดพร้อมกัน")
+        st.info("เลือกวันที่ แพลตฟอร์ม และผู้ดูแล (QC) เพื่อดูข้อมูลที่เคยลงในวันนั้น")
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -54,7 +54,34 @@ def render_accounts():
             if not qc_titles:
                 st.warning(f"ไม่พบนิยายของผู้ดูแล '{qc}'")
             else:
+                # Get existing entries for this date
+                date_str = entry_date.strftime("%Y-%m-%d")
+                existing = finance[(finance["วันที่"] == date_str) & (finance["แพลตฟอร์ม"] == platform)]
+
+                # Build grid starting with all titles for QC
                 grid = pd.DataFrame({"ชื่อเรื่อง": qc_titles, "ยอดดิบ (฿)": [0.0] * len(qc_titles)})
+
+                # Fill in existing values
+                for idx, title in enumerate(qc_titles):
+                    existing_row = existing[existing["ชื่อเรื่อง"] == title]
+                    if not existing_row.empty:
+                        grid.loc[idx, "ยอดดิบ (฿)"] = to_num(existing_row.iloc[0].get("ยอดดิบ", 0))
+
+                # Show existing entries summary
+                if not existing.empty:
+                    st.markdown(f"**📊 ข้อมูลที่ลงไปแล้วในวันนี้ ({date_str}):**")
+                    summary_cols = ["ชื่อเรื่อง", "ยอดดิบ", "ยอดสุทธิ"]
+                    summary_cols = [c for c in summary_cols if c in existing.columns]
+                    st.dataframe(
+                        existing[summary_cols],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    total_net = num_series(existing["ยอดสุทธิ"]).sum() if "ยอดสุทธิ" in existing.columns else 0
+                    st.caption(f"รวมสุทธิในวันนี้: {format_currency(total_net)} ฿")
+                    st.divider()
+
+                st.markdown("**เพิ่มเติม หรือแก้ไขยอด:**")
                 edited = st.data_editor(
                     grid,
                     use_container_width=True,
@@ -65,7 +92,7 @@ def render_accounts():
                             "ยอดดิบ (฿)", min_value=0.0, step=100.0, format="%.2f"
                         )
                     },
-                    key=f"quick_{qc}_{platform}",
+                    key=f"quick_{qc}_{platform}_{date_str}",
                 )
 
                 filled = [(r["ชื่อเรื่อง"], to_num(r["ยอดดิบ (฿)"]))
@@ -86,10 +113,10 @@ def render_accounts():
                             fee = round(gross * PLATFORM_FEE_RATE, 2)
                             net = round(gross - fee, 2)
                             rows.append([
-                                entry_date.strftime("%Y-%m-%d"),
+                                date_str,
                                 title, platform, gross, fee, net
                             ])
-                        _save_finance_rows(rows, f"{entry_date} / {platform} / {qc}")
+                        _save_finance_rows(rows, f"{date_str} / {platform} / {qc}")
                         st.success(f"✅ บันทึก {len(rows)} รายการสำเร็จ")
                         st.rerun()
 
