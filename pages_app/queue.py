@@ -63,6 +63,7 @@ def render_queue():
             template = pd.DataFrame(columns=CALENDAR_COLS)
         else:
             template = cal.copy()
+            template["วันที่"] = pd.to_datetime(template["วันที่"], errors="coerce")
 
         edited = st.data_editor(
             template,
@@ -85,6 +86,7 @@ def render_queue():
                 if clean.empty:
                     st.warning("ไม่มีรายการให้บันทึก")
                 else:
+                    clean["วันที่"] = clean["วันที่"].dt.strftime("%Y-%m-%d")
                     write_df(TAB_CALENDAR, clean)
                     log_audit("แก้ไขคิวงาน", f"บันทึก {len(clean)} รายการ")
                     st.success(f"✅ บันทึก {len(clean)} รายการสำเร็จ")
