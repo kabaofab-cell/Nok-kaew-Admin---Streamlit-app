@@ -200,6 +200,8 @@ def render_accounts():
             fin["_gross"] = num_series(fin.get("ยอดดิบ", pd.Series(dtype=float)))
             fin["_net"] = num_series(fin["ยอดสุทธิ"])
 
+            period_label = "ทุกเดือน" if picked == "ทั้งหมด" else thai_month_label(picked)
+
             c1, c2, c3 = st.columns(3)
             c1.metric("ยอดดิบรวม", format_currency(fin["_gross"].sum()))
             c2.metric("หักแพลตฟอร์ม", format_currency(fin["_gross"].sum() - fin["_net"].sum()))
@@ -209,17 +211,48 @@ def render_accounts():
 
             qc_map = title_to_qc_map()
             fin["ผู้ QC"] = fin["ชื่อเรื่อง"].map(lambda t: qc_map.get(str(t).strip(), "ไม่ระบุ"))
-            by_qc = fin.groupby("ผู้ QC")["_net"].sum().sort_values(ascending=False).reset_index()
 
-            st.subheader("👥 รายได้สุทธิ แยกตามผู้ QC")
-            cols = st.columns(max(len(by_qc), 1))
-            for col, (_, r) in zip(cols, by_qc.iterrows()):
-                col.metric(r["ผู้ QC"], format_currency(r["_net"]))
+            by_qc = (
+                fin.groupby("ผู้ QC")
+                .agg(ยอดดิบ=("_gross", "sum"), ยอดสุทธิ=("_net", "sum"))
+                .sort_values("ยอดสุทธิ", ascending=False)
+                .reset_index()
+            )
+
+            st.subheader(f"👥 รายได้สุทธิ แยกตามผู้ QC · {period_label}")
+
+            # Per-QC detail cards: gross total, net total, top novels
+            for _, r in by_qc.iterrows():
+                qc_name = r["ผู้ QC"]
+                with st.container(border=True):
+                    st.markdown(f"### 👤 {qc_name}")
+                    mc1, mc2, mc3 = st.columns(3)
+                    mc1.metric("ยอดขายรวม (ดิบ)", format_currency(r["ยอดดิบ"]))
+                    mc2.metric("หักแพลตฟอร์ม", format_currency(r["ยอดดิบ"] - r["ยอดสุทธิ"]))
+                    mc3.metric("💰 ยอดสุทธิ", format_currency(r["ยอดสุทธิ"]))
+
+                    qc_rows = fin[fin["ผู้ QC"] == qc_name]
+                    top_books = (
+                        qc_rows.groupby("ชื่อเรื่อง")
+                        .agg(ยอดดิบ=("_gross", "sum"), ยอดสุทธิ=("_net", "sum"))
+                        .sort_values("ยอดสุทธิ", ascending=False)
+                        .head(5)
+                        .reset_index()
+                    )
+                    if not top_books.empty:
+                        st.caption("🏆 เรื่องขายดี (Top 5)")
+                        disp = top_books.copy()
+                        disp["ยอดดิบ"] = disp["ยอดดิบ"].map(format_currency)
+                        disp["ยอดสุทธิ"] = disp["ยอดสุทธิ"].map(format_currency)
+                        st.dataframe(disp, use_container_width=True, hide_index=True)
+
+            st.divider()
 
             cc1, cc2 = st.columns(2)
             with cc1:
                 if not by_qc.empty:
-                    fig = px.pie(by_qc, names="ผู้ QC", values="_net", title="สัดส่วนรายได้ตาม QC")
+                    fig = px.pie(by_qc, names="ผู้ QC", values="ยอดสุทธิ",
+                                 title="สัดส่วนรายได้ตาม QC")
                     st.plotly_chart(fig, use_container_width=True)
             with cc2:
                 if "แพลตฟอร์ม" in fin.columns:
@@ -233,3 +266,21 @@ def render_accounts():
                     disp = by_plat.copy()
                     disp["รายได้สุทธิ"] = disp["รายได้สุทธิ"].map(format_currency)
                     st.dataframe(disp, use_container_width=True, hide_index=True)
+
+            # Reference table: all titles + sales for the selected period
+            st.divider()
+            st.subheader(f"📋 ตารางอ้างอิง — ยอดขายรายเรื่อง · {period_label}")
+            ref = (
+                fin.groupby(["ชื่อเรื่อง", "ผู้ QC"])
+                .agg(ยอดดิบ=("_gross", "sum"), ยอดสุทธิ=("_net", "sum"))
+                .sort_values("ยอดสุทธิ", ascending=False)
+                .reset_index()
+            )
+            if ref.empty:
+                st.info("ยังไม่มีข้อมูลในช่วงที่เลือก")
+            else:
+                st.caption(f"รวม {len(ref)} เรื่อง")
+                disp_ref = ref.copy()
+                disp_ref["ยอดดิบ"] = disp_ref["ยอดดิบ"].map(format_currency)
+                disp_ref["ยอดสุทธิ"] = disp_ref["ยอดสุทธิ"].map(format_currency)
+                st.dataframe(disp_ref, use_container_width=True, hide_index=True)
