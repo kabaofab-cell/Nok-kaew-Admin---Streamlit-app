@@ -43,12 +43,14 @@ def render_novels():
             st.info("ยังไม่มีนิยายใน Books")
         else:
             # Filters
-            fc1, fc2, fc3 = st.columns(3)
+            fc1, fc2, fc3, fc4 = st.columns(4)
             with fc1:
                 search = st.text_input("🔍 ค้นหา", placeholder="ชื่อเรื่อง...")
             with fc2:
                 f_cat = st.multiselect("หมวดหมู่", categories)
             with fc3:
+                f_qc = st.multiselect("QC", qc_list)
+            with fc4:
                 f_status = st.multiselect("สถานะ", STATUS_CHOICES)
 
             view = books.copy()
@@ -56,19 +58,15 @@ def render_novels():
                 view = view[view["ชื่อเรื่อง"].str.contains(search, case=False, na=False)]
             if f_cat:
                 view = view[view["หมวดหมู่"].isin(f_cat)]
+            if f_qc:
+                view = view[view["QC"].isin(f_qc)]
             if f_status:
                 view = view[view["สถานะ"].isin(f_status)]
 
-            st.caption(f"แสดง {len(view)} เรื่อง")
+            # Newest first (last rows in the sheet are the most recently added)
+            view = view.iloc[::-1]
 
-            # Handle edit dialog via query params
-            edit_idx = st.query_params.get("edit")
-            if edit_idx is not None:
-                try:
-                    idx = int(edit_idx)
-                    _show_edit_dialog(books, idx, categories, qc_list)
-                except (ValueError, IndexError):
-                    st.query_params.clear()
+            st.caption(f"แสดง {len(view)} เรื่อง · ใหม่สุดก่อน · 👆 คลิกชื่อเพื่อแก้ไข")
 
             # Header row
             widths = [0.55, 4.2, 1.5, 0.9, 1.4, 1.0]
@@ -79,6 +77,7 @@ def render_novels():
                            unsafe_allow_html=True)
             st.divider()
 
+            clicked_idx = None
             for row_idx, (df_idx, book) in enumerate(view.iterrows()):
                 row = st.columns(widths)
                 cover = str(book.get("ภาพปก", "")).strip()
@@ -91,8 +90,7 @@ def render_novels():
                     title = str(book.get("ชื่อเรื่อง", ""))
                     if st.button(title, key=f"edit_{df_idx}", use_container_width=True,
                                  help="คลิกเพื่อแก้ไข"):
-                        st.query_params["edit"] = str(df_idx)
-                        st.rerun()
+                        clicked_idx = df_idx
                 with row[2]:
                     st.markdown(f"<small>{book.get('หมวดหมู่','')}</small>", unsafe_allow_html=True)
                 with row[3]:
@@ -110,6 +108,11 @@ def render_novels():
                         "<hr style='margin:2px 0;border:none;border-top:1px solid #e5e7eb'>",
                         unsafe_allow_html=True,
                     )
+
+            # Open the edit dialog only when a title was clicked this run.
+            # (Calling st.dialog directly avoids the persistent ?edit= popup bug.)
+            if clicked_idx is not None:
+                _show_edit_dialog(books, clicked_idx, categories, qc_list)
 
     # ── Quick edit table ──
     with tab_quick:
@@ -178,7 +181,6 @@ def render_novels():
 def _show_edit_dialog(books, idx, categories, qc_list):
     """Show edit form for the book at DataFrame index idx."""
     if idx not in books.index:
-        st.query_params.clear()
         return
 
     book = books.loc[idx]
@@ -228,11 +230,9 @@ def _show_edit_dialog(books, idx, categories, qc_list):
             ]
             update_worksheet_row(TAB_BOOKS, row_num, new_data)
             log_audit("แก้ไขนิยาย", title.strip())
-            st.query_params.clear()
             st.rerun()
 
         if cancelled:
-            st.query_params.clear()
             st.rerun()
 
         st.divider()
@@ -242,7 +242,6 @@ def _show_edit_dialog(books, idx, categories, qc_list):
                 row_num = books.index.get_loc(idx) + 1
                 delete_worksheet_row(TAB_BOOKS, row_num)
                 log_audit("ลบนิยาย", str(book.get("ชื่อเรื่อง", "")))
-                st.query_params.clear()
                 st.rerun()
 
     _dialog()
