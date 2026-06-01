@@ -267,11 +267,22 @@ def render_accounts():
 
             if st.button("💾 บันทึกการแก้ไข", type="primary"):
                 try:
-                    # Rebuild with proper columns
-                    updated = edited_fin.reindex(columns=FINANCE_COLS)
-                    write_df(TAB_FINANCE, updated)
-                    log_audit("แก้ไขรายรับ", f"บันทึก {len(updated)} รายการ")
-                    st.success("✅ บันทึกสำเร็จ")
+                    # Preserve other months' data + merge with edited rows
+                    edited_fin = edited_fin.reindex(columns=FINANCE_COLS)
+
+                    if picked == "ทั้งหมด":
+                        # If showing all data, replace entire sheet
+                        result = edited_fin
+                    else:
+                        # If filtered by month, keep other months untouched
+                        other_months = finance[finance["วันที่"].map(_norm)
+                                              .str[:7] != picked]  # Keep non-matching months
+                        result = pd.concat([other_months, edited_fin],
+                                          ignore_index=True).reindex(columns=FINANCE_COLS)
+
+                    write_df(TAB_FINANCE, result)
+                    log_audit("แก้ไขรายรับ", f"บันทึก {len(edited_fin)} รายการ (เดือน {picked})")
+                    st.success("✅ บันทึกสำเร็จ (ข้อมูลเดือนอื่นอยู่ครบ)")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ บันทึกไม่สำเร็จ: {e}")
