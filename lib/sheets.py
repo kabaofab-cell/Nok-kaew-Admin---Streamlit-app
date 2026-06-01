@@ -68,7 +68,7 @@ def get_platforms():
         return []
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def get_qc_list():
     """Get unique QC names from Books tab."""
     try:
