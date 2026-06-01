@@ -252,10 +252,29 @@ def render_accounts():
                     st.success(f"✅ ลบรายการซ้ำ {removed} แถวสำเร็จ")
                     st.rerun()
 
-            st.dataframe(
-                fin.drop(columns=["_date", "_month"], errors="ignore"),
-                use_container_width=True, hide_index=True,
+            st.divider()
+
+            # Editable table: edit values, add rows, or delete rows
+            st.subheader("📝 แก้ไขข้อมูล")
+            disp_cols = [c for c in FINANCE_COLS if c in fin.columns]
+            edited_fin = st.data_editor(
+                fin[disp_cols].reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key="finance_editor",
             )
+
+            if st.button("💾 บันทึกการแก้ไข", type="primary"):
+                try:
+                    # Rebuild with proper columns
+                    updated = edited_fin.reindex(columns=FINANCE_COLS)
+                    write_df(TAB_FINANCE, updated)
+                    log_audit("แก้ไขรายรับ", f"บันทึก {len(updated)} รายการ")
+                    st.success("✅ บันทึกสำเร็จ")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ บันทึกไม่สำเร็จ: {e}")
 
     # ── Split summary ──
     with tab_split:
