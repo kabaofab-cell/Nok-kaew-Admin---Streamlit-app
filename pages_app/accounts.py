@@ -6,15 +6,78 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-from lib.sheets import get_df, get_platforms, get_qc_list, append_rows, log_audit, title_to_qc_map
-from lib.schema import TAB_FINANCE, TAB_BOOKS, PLATFORM_FEE_RATE
+from lib.sheets import get_df, get_platforms, get_qc_list, write_df, log_audit, title_to_qc_map
+from lib.schema import TAB_FINANCE, TAB_BOOKS, FINANCE_COLS, PLATFORM_FEE_RATE
 from lib.helpers import format_currency, num_series, to_num, add_month_column, month_options, thai_month_label
 
 
-def _save_finance_rows(rows, source):
-    from lib.sheets import append_rows
-    append_rows(TAB_FINANCE, rows)
-    log_audit("เพิ่มรายรับ", f"{source} ({len(rows)} รายการ)")
+def _norm(s):
+    return str(s).strip()
+
+
+def _upsert_finance(date_str, platform, filled):
+    """Insert or update Finance rows, keyed on (วันที่, แพลตฟอร์ม, ชื่อเรื่อง).
+
+    Existing rows for the same date+platform+title are replaced (no duplicates).
+    Returns (num_new, num_updated).
+    """
+    cur = get_df(TAB_FINANCE)
+    if cur.empty:
+        cur = pd.DataFrame(columns=FINANCE_COLS)
+    cur = cur.reindex(columns=FINANCE_COLS).fillna("")
+
+    titles = {_norm(t) for t, _ in filled}
+    plat_n = _norm(platform)
+
+    key = (
+        (cur["วันที่"].map(_norm) == date_str)
+        & (cur["แพลตฟอร์ม"].map(_norm) == plat_n)
+        & (cur["ชื่อเรื่อง"].map(_norm).isin(titles))
+    )
+    n_updated = int(key.sum())
+    kept = cur[~key]
+
+    new_rows = []
+    for title, gross in filled:
+        fee = round(gross * PLATFORM_FEE_RATE, 2)
+        net = round(gross - fee, 2)
+        new_rows.append({
+            "วันที่": date_str,
+            "ชื่อเรื่อง": _norm(title),
+            "แพลตฟอร์ม": plat_n,
+            "ยอดดิบ": gross,
+            "หักแพลตฟอร์ม (17%)": fee,
+            "ยอดสุทธิ": net,
+        })
+
+    updated = pd.concat([kept, pd.DataFrame(new_rows)], ignore_index=True)
+    updated = updated.reindex(columns=FINANCE_COLS)
+    write_df(TAB_FINANCE, updated)
+
+    n_new = len(filled) - n_updated
+    return max(n_new, 0), n_updated
+
+
+def _dedupe_finance():
+    """Remove duplicate Finance rows on (วันที่, แพลตฟอร์ม, ชื่อเรื่อง), keep last.
+
+    Returns number of rows removed.
+    """
+    cur = get_df(TAB_FINANCE)
+    if cur.empty:
+        return 0
+    cur = cur.reindex(columns=FINANCE_COLS).fillna("")
+    n_before = len(cur)
+    keys = pd.DataFrame({
+        "d": cur["วันที่"].map(_norm),
+        "p": cur["แพลตฟอร์ม"].map(_norm),
+        "t": cur["ชื่อเรื่อง"].map(_norm),
+    })
+    cur = cur[~keys.duplicated(keep="last")]
+    removed = n_before - len(cur)
+    if removed > 0:
+        write_df(TAB_FINANCE, cur.reindex(columns=FINANCE_COLS))
+    return removed
 
 
 def render_accounts():
@@ -108,16 +171,12 @@ def render_accounts():
                     if not filled:
                         st.error("ยังไม่ได้กรอกยอดเลย")
                     else:
-                        rows = []
-                        for title, gross in filled:
-                            fee = round(gross * PLATFORM_FEE_RATE, 2)
-                            net = round(gross - fee, 2)
-                            rows.append([
-                                date_str,
-                                title, platform, gross, fee, net
-                            ])
-                        _save_finance_rows(rows, f"{date_str} / {platform} / {qc}")
-                        st.success(f"✅ บันทึก {len(rows)} รายการสำเร็จ")
+                        n_new, n_upd = _upsert_finance(date_str, platform, filled)
+                        log_audit("บันทึกรายรับ",
+                                  f"{date_str} / {platform} / {qc} "
+                                  f"(ใหม่ {n_new}, อัปเดต {n_upd})")
+                        st.success(f"✅ บันทึกสำเร็จ — เพิ่มใหม่ {n_new} เรื่อง, "
+                                   f"อัปเดต {n_upd} เรื่อง (ไม่บันทึกซ้ำ)")
                         st.rerun()
 
     # ── This month ──
@@ -176,6 +235,23 @@ def render_accounts():
             fin = fin.sort_values("_date", ascending=False)
             net_total = num_series(fin["ยอดสุทธิ"]).sum() if "ยอดสุทธิ" in fin.columns else 0
             st.caption(f"แสดง {len(fin)} รายการ · ยอดสุทธิรวม {format_currency(net_total)} ฿")
+
+            # Duplicate detection / cleanup (key: date + platform + title)
+            dup_keys = pd.DataFrame({
+                "d": finance["วันที่"].map(_norm),
+                "p": finance.get("แพลตฟอร์ม", pd.Series([""] * len(finance))).map(_norm),
+                "t": finance["ชื่อเรื่อง"].map(_norm),
+            })
+            n_dup = int(dup_keys.duplicated(keep="last").sum())
+            if n_dup > 0:
+                st.warning(f"⚠️ พบรายการซ้ำ {n_dup} แถว "
+                           "(วันที่ + แพลตฟอร์ม + ชื่อเรื่อง เดียวกัน)")
+                if st.button("🧹 ลบรายการซ้ำ (เก็บรายการล่าสุด)", type="primary"):
+                    removed = _dedupe_finance()
+                    log_audit("ลบรายการซ้ำ", f"ลบ {removed} แถว")
+                    st.success(f"✅ ลบรายการซ้ำ {removed} แถวสำเร็จ")
+                    st.rerun()
+
             st.dataframe(
                 fin.drop(columns=["_date", "_month"], errors="ignore"),
                 use_container_width=True, hide_index=True,
