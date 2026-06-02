@@ -8,6 +8,7 @@ from lib.sheets import (
     update_worksheet_row, delete_worksheet_row, log_audit,
 )
 from lib.schema import TAB_BOOKS, BOOKS_COLS, STATUS_CHOICES
+from lib.imgbb import upload_to_imgbb
 
 
 def _status_badge(status):
@@ -21,6 +22,32 @@ def _status_badge(status):
         f'<span style="background:{bg};color:{fg};padding:2px 8px;'
         f'border-radius:999px;font-size:0.75rem;font-weight:600">{status}</span>'
     )
+
+
+def _imgbb_uploader(session_key: str, current_url: str = "") -> str:
+    """Show file uploader + upload button. Returns the current cover URL."""
+    uploaded = st.file_uploader(
+        "📤 อัพรูปปกจากเครื่อง",
+        type=["jpg", "jpeg", "png", "webp"],
+        key=f"uploader_{session_key}",
+        help="รองรับ JPG, PNG, WebP ขนาดสูงสุด 32 MB",
+    )
+    if uploaded:
+        col_btn, col_info = st.columns([1, 3])
+        with col_btn:
+            if st.button("☁️ Upload", key=f"upload_btn_{session_key}", type="secondary"):
+                with st.spinner("กำลัง upload..."):
+                    try:
+                        url = upload_to_imgbb(uploaded.read())
+                        st.session_state[session_key] = url
+                        st.success("✅ Upload สำเร็จ")
+                    except Exception as e:
+                        st.error(f"❌ Upload ไม่สำเร็จ: {e}")
+        with col_info:
+            st.caption("กดปุ่ม ☁️ Upload เพื่อส่งรูปขึ้น ImgBB")
+
+    # Return URL from session_state if just uploaded, else fall back to current_url
+    return st.session_state.get(session_key, current_url)
 
 
 def render_novels():
@@ -110,7 +137,6 @@ def render_novels():
                     )
 
             # Open the edit dialog only when a title was clicked this run.
-            # (Calling st.dialog directly avoids the persistent ?edit= popup bug.)
             if clicked_idx is not None:
                 _show_edit_dialog(books, clicked_idx, categories, qc_list)
 
@@ -149,6 +175,9 @@ def render_novels():
 
     # ── Add new novel ──
     with tab_add:
+        # Upload widget sits outside the form so it can trigger a rerun
+        cover_url = _imgbb_uploader("add_novel_cover")
+
         with st.form("add_novel"):
             title = st.text_input("ชื่อเรื่อง *", placeholder="เช่น พรายก้อยฟ้อง")
             c1, c2 = st.columns(2)
@@ -159,7 +188,11 @@ def render_novels():
             with c2:
                 ep_cur = st.text_input("ตอนปัจจุบัน", placeholder="เช่น 20")
                 ep_goal = st.text_input("เป้าหมาย", placeholder="เช่น 50")
-                cover_url = st.text_input("ลิงก์ภาพปก", placeholder="https://...")
+                cover_input = st.text_input(
+                    "ลิงก์ภาพปก",
+                    value=cover_url,
+                    placeholder="https://... (หรืออัพรูปด้านบน)",
+                )
 
             synopsis = st.text_area("เรื่องย่อ")
 
@@ -167,11 +200,13 @@ def render_novels():
                 if title.strip():
                     new_row = [
                         title.strip(), category, qc, status,
-                        ep_cur, ep_goal, cover_url,
+                        ep_cur, ep_goal, cover_input,
                         "", "[]", "[]", synopsis, ""
                     ]
                     append_row(TAB_BOOKS, new_row)
                     log_audit("เพิ่มนิยาย", title.strip())
+                    # Clear uploaded cover from session state after save
+                    st.session_state.pop("add_novel_cover", None)
                     st.success(f"✅ เพิ่ม '{title}' สำเร็จ")
                     st.rerun()
                 else:
@@ -184,9 +219,18 @@ def _show_edit_dialog(books, idx, categories, qc_list):
         return
 
     book = books.loc[idx]
+    session_key = f"edit_cover_{idx}"
 
     @st.dialog(f"แก้ไข: {book.get('ชื่อเรื่อง', '')}")
     def _dialog():
+        # Cover preview
+        existing_cover = str(book.get("ภาพปก", "")).strip()
+        if existing_cover and existing_cover.startswith("http"):
+            st.image(existing_cover, width=80)
+
+        # Upload widget outside the form
+        uploaded_url = _imgbb_uploader(session_key, existing_cover)
+
         with st.form("edit_novel_form"):
             title = st.text_input("ชื่อเรื่อง *", value=str(book.get("ชื่อเรื่อง", "")))
             c1, c2 = st.columns(2)
@@ -207,7 +251,11 @@ def _show_edit_dialog(books, idx, categories, qc_list):
             with c2:
                 ep_cur = st.text_input("ตอนปัจจุบัน", value=str(book.get("ตอนปัจจุบัน", "")))
                 ep_goal = st.text_input("เป้าหมาย", value=str(book.get("เป้าหมาย", "")))
-                cover = st.text_input("ลิงก์ภาพปก", value=str(book.get("ภาพปก", "")))
+                cover = st.text_input(
+                    "ลิงก์ภาพปก",
+                    value=uploaded_url,
+                    placeholder="https://... (หรืออัพรูปด้านบน)",
+                )
 
             synopsis = st.text_area("เรื่องย่อ", value=str(book.get("เรื่องย่อ", "")))
 
@@ -230,9 +278,11 @@ def _show_edit_dialog(books, idx, categories, qc_list):
             ]
             update_worksheet_row(TAB_BOOKS, row_num, new_data)
             log_audit("แก้ไขนิยาย", title.strip())
+            st.session_state.pop(session_key, None)
             st.rerun()
 
         if cancelled:
+            st.session_state.pop(session_key, None)
             st.rerun()
 
         st.divider()
